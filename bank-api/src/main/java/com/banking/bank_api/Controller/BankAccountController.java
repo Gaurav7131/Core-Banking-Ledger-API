@@ -1,9 +1,11 @@
-package com.banking.bank_api.Controller;
+package com.banking.bank_api.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-import com.banking.bank_api.Entity.BankAccount;
-import com.banking.bank_api.Repository.BankAccountRepository;
+
+import com.banking.bank_api.entity.BankAccount;
+import com.banking.bank_api.repository.BankAccountRepository;
+
 import org.springframework.lang.NonNull;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
