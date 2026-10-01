@@ -1,70 +1,95 @@
 package com.banking.bank_api.service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 @Service
-public class SecureTransferAgentService {
+public class SecureTransferServices {
 
-    private static final Logger log = LoggerFactory.getLogger(SecureTransferAgentService.class);
+    private static final Logger log = LoggerFactory.getLogger(SecureTransferServices.class);
 
-    private final Map<String, Double> accounts = new ConcurrentHashMap<>();
-    private final Map<String, PendingApproval> pendingApprovals = new ConcurrentHashMap<>();
+    private final Map<String, BigDecimal> account = new ConcurrentHashMap<>();
+    private final Map<String, PendingApproval> pendingApproval = new ConcurrentHashMap<>();
 
-    public SecureTransferAgentService() {
-        accounts.put("ACC-101", 10000.00);
-        accounts.put("ACC-202", 500.00);
+    public SecureTransferServices() {
+        account.put("Acc-101", BigDecimal.valueOf(101.01));
+        account.put("Acc-102", BigDecimal.valueOf(3000.00));
     }
 
-    @Tool(description = "Initiates a fund transfer. Transfers over $500 require mandatory human approval.")
+    @Tool(description = "Initiate fund transfer from source account to destination account")
     public String requestTransfer(
-            @ToolParam(description = "Source account ID") String fromAccount,
-            @ToolParam(description = "Destination account ID") String toAccount,
-            @ToolParam(description = "Amount in USD") double amount) {
+            @ToolParam(description = "Source Account (e.g. Acc-101)") String fromAccount,
+            @ToolParam(description = "Destination Account (e.g. Acc-102)") String toAccount,
+            @ToolParam(description = "Transfer Amount") Double amount) {
 
-        log.info(" Evaluating transfer request: ${} from {} to {}", amount, fromAccount, toAccount);
+        log.info("Evaluating funds transfer: {} -> {}, amount: {}", fromAccount, toAccount, amount);
 
-        if (!accounts.containsKey(fromAccount) || !accounts.containsKey(toAccount)) {
-            return "Transfer failed";
+        if (amount == null || amount <= 0) {
+            return "Transfer failed: Amount must be greater than zero.";
         }
 
-        // HITL(Human in the loop) Threshold Check
-        if (amount > 500.00) {
+        if (!account.containsKey(fromAccount) || !account.containsKey(toAccount)) {
+            return "Transfer failed: One or both accounts do not exist.";
+        }
+
+        BigDecimal transferAmount = BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal currentBalance = account.get(fromAccount);
+
+        if (currentBalance.compareTo(transferAmount) < 0) {
+            return String.format("Transfer failed: Insufficient balance in %s. Available: $%.2f",
+                    fromAccount, currentBalance);
+        }
+
+        // HITL Threshold Check: requires supervisor approval if over $500
+        if (transferAmount.compareTo(BigDecimal.valueOf(500.00)) > 0) {
             String approvalId = "REQ-" + System.currentTimeMillis();
-            pendingApprovals.put(approvalId, new PendingApproval(fromAccount, toAccount, amount));
+            pendingApproval.put(approvalId, new PendingApproval(fromAccount, toAccount, transferAmount));
 
-            log.warn("[HITL HALT] Transaction exceeds $500 threshold! Halted for human approval", approvalId);
-            return String.format("HALTED: Transfer of ${amount} requires supervisor approval. ", amount, approvalId);
+            log.warn("Transfer exceeds $500. Halted for human approval. Ticket ID: {}", approvalId);
+            return String.format("Transaction exceeds $500 threshold! Halted for human approval. Ticket ID: %s",
+                    approvalId);
         }
 
-        // Auto-approve small transactions(<500.00)
-        executeTransferLogic(fromAccount, toAccount, amount);
-        return String.format("Successfully auto-transferred ${amount} from %s to %s.", amount, fromAccount, toAccount);
+        executeTransferLogic(fromAccount, toAccount, transferAmount);
+        return String.format("Successfully auto-transferred $%.2f from %s to %s.",
+                transferAmount, fromAccount, toAccount);
     }
 
+    // Notice: NO @Tool annotation here, preventing the LLM from approving its own transactions
     public String approveAndExecute(String approvalId) {
-        PendingApproval approval = pendingApprovals.remove(approvalId);
+        PendingApproval approval = pendingApproval.remove(approvalId);
 
         if (approval == null) {
-            return "Approval failed: Invalid or expired ticket ID";
+            return "Approval Failed: Invalid or expired Ticket ID.";
+        }
+
+        // Re-check balance at execution time
+        BigDecimal currentBalance = account.get(approval.from());
+        if (currentBalance.compareTo(approval.amount()) < 0) {
+            return String.format("Approval Failed: Source account %s no longer has sufficient balance.", approval.from());
         }
 
         executeTransferLogic(approval.from(), approval.to(), approval.amount());
-        return String.format("Supervisor approved! Transferred ${amount} from %s to %s.", approval.amount(),
-                approval.from(), approval.to());
+        return String.format("Supervisor approved! Transferred $%.2f from %s to %s. Ticket ID: %s",
+                approval.amount(), approval.from(), approval.to(), approvalId);
     }
 
-    private void executeTransferLogic(String from, String to, double amount) {
-        accounts.put(from, accounts.get(from) - amount);// deposit
-        accounts.put(to, accounts.get(to) + amount);// credited
+    public Map<String, BigDecimal> getBalances() {
+        return Map.copyOf(account);
     }
 
-    private record PendingApproval(String from, String to, double amount) {
+    private synchronized void executeTransferLogic(String from, String to, BigDecimal amount) {
+        account.put(from, account.get(from).subtract(amount));
+        account.put(to, account.get(to).add(amount));
     }
+
+    public record PendingApproval(String from, String to, BigDecimal amount) {}
 }
